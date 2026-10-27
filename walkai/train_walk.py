@@ -23,6 +23,28 @@ ENVS = {"walk": WalkEnv, "getup": WalkGetUpEnv}
 OUT_DIR = ROOT / "checkpoints"
 
 
+class StdFloor(BaseCallback):
+    """Keep the policy's action std >= std_min (more exploration for lifting the feet); re-applied before every rollout."""
+
+    def __init__(self, std_min):
+        super().__init__()
+        self.log_min = float(np.log(std_min))
+
+    def _clamp(self):
+        import torch
+        with torch.no_grad():
+            self.model.policy.log_std.data.clamp_(min=self.log_min)
+
+    def _on_training_start(self):
+        self._clamp()
+
+    def _on_rollout_start(self):
+        self._clamp()
+
+    def _on_step(self):
+        return True
+
+
 class VmaxCurriculum(BaseCallback):
     """Raise the command ceiling by `step` once recent walk-command episodes rarely fall and track the command."""
 
@@ -35,7 +57,8 @@ class VmaxCurriculum(BaseCallback):
 
     def _on_training_start(self):
         n = self.training_env.num_envs
-        self.sum_vx, self.n_steps, self.cmd, self.up = np.zeros(n), np.zeros(n), np.zeros(n), np.zeros(n)
+        self.sum_vx, self.n_steps, self.cmd, self.up, self.steps = (np.zeros(n) for _ in range(5))
+        self.ep_steps = []
         self.training_env.env_method("set_vmax", self.vmax)
 
     def _on_step(self):
@@ -43,6 +66,7 @@ class VmaxCurriculum(BaseCallback):
             self.sum_vx[i] += info["vx"]
             self.n_steps[i] += 1
             self.up[i] += info["upright"]
+            self.steps[i] += info["real_steps"]
             self.cmd[i] = info["cmd"]
             if done:
                 # no-termination env (getup): "fell" = was upright for under 70% of the episode
@@ -50,13 +74,18 @@ class VmaxCurriculum(BaseCallback):
                 if self.cmd[i] > 0:
                     track = (self.sum_vx[i] / self.n_steps[i]) / self.cmd[i]
                     self.recent.append((fell, track))
-                self.sum_vx[i] = self.n_steps[i] = self.up[i] = 0
+                if self.cmd[i] > 0.1:
+                    self.ep_steps.append(self.steps[i])
+                self.sum_vx[i] = self.n_steps[i] = self.up[i] = self.steps[i] = 0
         if len(self.recent) >= self.window:
             fall = np.mean([f for f, _ in self.recent])
             track = np.mean([t for f, t in self.recent if not f] or [0.0])
             self.logger.record("walk/fall_rate", fall)
             self.logger.record("walk/track_ratio", track)
             self.logger.record("walk/vmax", self.vmax)
+            if self.ep_steps:
+                self.logger.record("walk/real_steps_per_ep", float(np.mean(self.ep_steps)))
+                self.ep_steps = []
             if fall <= self.max_fall and track >= self.min_track and self.vmax < self.vmax_end:
                 self.vmax = round(min(self.vmax + self.step, self.vmax_end), 3)
                 self.training_env.env_method("set_vmax", self.vmax)
@@ -74,6 +103,7 @@ def main():
     p.add_argument("--n-envs", type=int, default=14)
     p.add_argument("--learning-rate", type=float, default=5e-5, help="standai: low lr keeps the warm start stable")
     p.add_argument("--target-kl", type=float, default=0.03)
+    p.add_argument("--std-min", type=float, default=0.4, help="floor for the action std (exploration)")
     p.add_argument("--vmax", type=float, default=0.3)
     p.add_argument("--stand-frac", type=float, default=1.0, help="getup env: share of calm standing starts (rest: crouched / lying)")
     p.add_argument("--vmax-end", type=float, default=1.0)
@@ -89,6 +119,7 @@ def main():
                      tensorboard_log=str(OUT_DIR / "tb"))
     print(f"[walk] warm-start {args.init_from}; run {run}", flush=True)
     model.learn(args.timesteps, reset_num_timesteps=True, tb_log_name=run, log_interval=5, callback=[
+        StdFloor(args.std_min),
         VmaxCurriculum(args.vmax, args.vmax_end),
         CheckpointCallback(max(args.save_freq // args.n_envs, 1), str(OUT_DIR / "autosave"), name_prefix=run)])
     model.save(OUT_DIR / f"{args.out}_final.zip")

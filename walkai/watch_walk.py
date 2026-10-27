@@ -39,18 +39,18 @@ def main():
         while viewer.is_running():
             obs, _ = env.reset(seed=seed)
             seed += 1
-            vxs, ups = [], []
+            vxs, ups, steps = [], [], 0
             while viewer.is_running():
                 act, _ = model.predict(obs, deterministic=True)
                 obs, _r, term, trunc, info = env.step(act)
-                vxs.append(info["vx"]); ups.append(info["upright"])
+                vxs.append(info["vx"]); ups.append(info["upright"]); steps += info["real_steps"]
                 viewer.cam.lookat[:] = [env.data.xpos[env.a_torso_id][0], 0, 0.8]
                 viewer.sync()
                 time.sleep(dt)
                 if term or trunc:
                     break
             print(f"seed {seed - 1}: cmd {info['cmd']:.2f} m/s, mean vx {np.mean(vxs):+.2f}, upright {np.mean(ups) * 100:.0f}% of the time, "
-                  f"moved {info['root_x']:+.2f} m", flush=True)
+                  f"moved {info['root_x']:+.2f} m, real steps {steps}", flush=True)
             time.sleep(1.0)
 
 

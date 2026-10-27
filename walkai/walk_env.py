@@ -47,10 +47,10 @@ ACTION_RATE_K = 1.0         # penalty * mean((a_t - a_{t-1})^2): high-frequency 
 DT = 0.02
 # ---- limits that keep the motion a walk (walk6 flailed the legs overhead and slid on the planted foot) ----
 PLANTED_Z = 0.12            # foot site z below which the foot counts as planted (standing: 0.07-0.09)
-SLIP_K = 4.0                # penalty per m/s of horizontal speed of a planted foot
+SLIP_K = 8.0                # penalty per m/s of horizontal speed of a planted foot
 FOOT_Z_MAX = 0.35           # swing foot higher than this is penalised (K per m above)
 FOOT_Z_K = 30.0
-HIP_MAX_RAD = 0.96          # ~55 deg flexion; limits -20..120 deg
+HIP_MAX_RAD = 0.8           # ~55 deg flexion; limits -20..120 deg
 HIP_K = 20.0                # per rad beyond HIP_MAX_RAD
 KNEE_MIN_RAD = -1.75        # ~-100 deg; limits -140..0
 KNEE_K = 10.0
@@ -61,6 +61,10 @@ FOOT_V_CAP = 2.0
 BODY_V_CAP = 1.0
 QUALITY_SCALE = 2.0         # gait quality q = exp(-violations / QUALITY_SCALE) in (0, 1]; gates every walking reward (never negative)
 STAND_SCALE_WALKING = 0.3   # GetUpEnv's standing reward (+1/step) is scaled by this while a walking command is active, so staying put is no longer the safe option
+STEP_LEAD_MAX = 1.2         # MPC's feasible gaits land the foot up to ~1 m ahead of the other (was capped at 0.6: counted 0-5 steps)
+SS_K = 1.5                  # dense single-support reward: exactly one foot lifted (<= SS_MAX_AIR_S), the other planted (MPC cost term)
+SS_MAX_AIR_S = 0.5          # standing on one leg forever (flamingo) earns nothing
+FLIGHT_K = 8.0              # both feet off the ground = hopping (MPC cost term)
 STEP_LEAD_MIN = 0.10        # ... and a real step must land the foot at least this far ahead of the other foot
 
 
@@ -77,6 +81,7 @@ class GaitTracker:
         self.prev_x = None
         self.vfoot = [0.0, 0.0]
         self.zfoot = [0.0, 0.0]
+        self.single = 0.0
         self.last = {}
 
     def update(self, env, action, moving):
@@ -90,7 +95,7 @@ class GaitTracker:
                 self.air[f] += DT
             elif self.air[f] > 0.0:                       # touchdown
                 if (self.air[f] >= STEP_MIN_AIR_S and not lifted[1 - f] and moving
-                        and STEP_LEAD_MIN <= xs[f] - xs[1 - f] <= 0.6):
+                        and STEP_LEAD_MIN <= xs[f] - xs[1 - f] <= STEP_LEAD_MAX):
                     bonus += STEP_BONUS * (min(self.air[f], STEP_AIR_CAP_S) - STEP_MIN_AIR_S + 0.05)
                     real += 1
                 self.air[f] = 0.0
@@ -111,7 +116,10 @@ class GaitTracker:
         knee = KNEE_K * sum(max(0.0, KNEE_MIN_RAD - float(qpos[env.model.joint(n).qposadr[0]])) for n in ("a_knee_r", "a_knee_l"))
         height = FOOT_Z_K * sum(max(0.0, z - FOOT_Z_MAX) for z in zs)
         gap = FEET_GAP_K * max(0.0, abs(xs[0] - xs[1]) - FEET_GAP_MAX)
-        self.last = dict(slip=slip, hip=hip, knee=knee, height=height, gap=gap, rate=pen)
+        flight = FLIGHT_K * float(zs[0] > PLANTED_Z and zs[1] > PLANTED_Z)
+        self.single = float((zs[0] > 0.15) != (zs[1] > 0.15) and max(self.air) <= SS_MAX_AIR_S
+                            and (zs[1] if zs[0] > 0.15 else zs[0]) < PLANTED_Z)
+        self.last = dict(slip=slip, hip=hip, knee=knee, height=height, gap=gap, flight=flight, rate=pen)
         return bonus, gate, pen, real
 
 
@@ -139,7 +147,8 @@ def walk_reward(env, upright, action):
     swing_v = max([min(max(g.vfoot[f], 0.0), FOOT_V_CAP) for f in (0, 1) if g.zfoot[f] > PLANTED_Z] or [0.0])
     couple = COUPLE_K * swing_v * min(max(vx, 0.0), BODY_V_CAP) * float(moving and upright) * q
     bonus *= upright * q
-    return vel + bonus + couple, vx, {"walk_vel": vel, "step_bonus": bonus, "couple": couple, "quality": q, "real_steps": real,
+    single = SS_K * g.single * float(moving and upright) * q
+    return vel + bonus + couple + single, vx, {"walk_vel": vel, "step_bonus": bonus, "couple": couple, "single": single, "quality": q, "real_steps": real,
                                       **{"viol_" + k: v for k, v in g.last.items()}}
 
 

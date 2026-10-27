@@ -1,0 +1,3 @@
+[submodule "standai"]
+	path = standai
+	url = https://github.com/SungyupKim/standai

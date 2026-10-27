@@ -56,6 +56,10 @@ KNEE_MIN_RAD = -1.75        # ~-100 deg; limits -140..0
 KNEE_K = 10.0
 FEET_GAP_MAX = 0.5          # |x_r - x_l| beyond this (m) is penalised (the stand policy stands in a 0.4-0.8 m split) ...
 FEET_GAP_K = 3.0
+COUPLE_K = 3.0              # reward = K * (forward speed of the swinging foot, world frame, <= 2 m/s) * (body forward speed, <= 1 m/s)
+FOOT_V_CAP = 2.0
+BODY_V_CAP = 1.0
+QUALITY_SCALE = 2.0         # gait quality q = exp(-violations / QUALITY_SCALE) in (0, 1]; gates every walking reward (never negative)
 STEP_LEAD_MIN = 0.10        # ... and a real step must land the foot at least this far ahead of the other foot
 
 
@@ -70,6 +74,8 @@ class GaitTracker:
         self.since_step = 10 ** 6
         self.prev_action = None
         self.prev_x = None
+        self.vfoot = [0.0, 0.0]
+        self.zfoot = [0.0, 0.0]
         self.last = {}
 
     def update(self, env, action, moving):
@@ -96,6 +102,8 @@ class GaitTracker:
         slip = 0.0
         if self.prev_x is not None:
             slip = SLIP_K * sum(abs(xs[f] - self.prev_x[f]) / DT for f in (0, 1) if zs[f] < PLANTED_Z)
+        self.vfoot = [0.0, 0.0] if self.prev_x is None else [(xs[f] - self.prev_x[f]) / DT for f in (0, 1)]
+        self.zfoot = zs
         self.prev_x = xs
         qpos = env.data.qpos
         hip = HIP_K * sum(max(0.0, float(qpos[env.model.joint(n).qposadr[0]]) - HIP_MAX_RAD) for n in ("a_hip_r", "a_hip_l"))
@@ -116,16 +124,22 @@ def draw_cmd(rng, vmax, fixed_cmd=None):
 
 
 def walk_reward(env, upright, action):
-    """Velocity tracking (paid only while upright, gated on real steps) + step bonus - action-rate penalty.
+    """Walking reward, never negative: every term is gated by the gait quality q = exp(-violations / QUALITY_SCALE)
+    (planted-foot slip, foot height, hip/knee angle, foot gap, action rate). Terms:
+      velocity tracking (gated on a real step in the last second), step bonus, and K * swing-foot speed * body speed.
     Returns (total reward, vx, breakdown dict)."""
     vx = float(env.data.qvel[env._a_root_x_dof])
     moving = env._target_vx > 0.1
-    bonus, gate, pen, real = env._gait.update(env, action, moving)
-    cons = sum(v for k, v in env._gait.last.items() if k != "rate") * float(moving and upright)   # only while walking
-    pen += cons
-    vel = WALK_VEL_SCALE * float(np.exp(-((vx - env._target_vx) ** 2) / (2.0 * WALK_VEL_SIGMA ** 2))) * upright * gate
-    bonus *= upright
-    return vel + bonus - pen, vx, {"walk_vel": vel, "step_bonus": bonus, "penalty": -pen, "real_steps": real, **{"pen_" + k: -v for k, v in env._gait.last.items()}}
+    g = env._gait
+    bonus, gate, rate, real = g.update(env, action, moving)
+    viol = (sum(v for k, v in g.last.items() if k != "rate") + rate) * float(moving and upright)
+    q = float(np.exp(-viol / QUALITY_SCALE))
+    vel = WALK_VEL_SCALE * float(np.exp(-((vx - env._target_vx) ** 2) / (2.0 * WALK_VEL_SIGMA ** 2))) * upright * gate * q
+    swing_v = max([min(max(g.vfoot[f], 0.0), FOOT_V_CAP) for f in (0, 1) if g.zfoot[f] > PLANTED_Z] or [0.0])
+    couple = COUPLE_K * swing_v * min(max(vx, 0.0), BODY_V_CAP) * float(moving and upright) * q
+    bonus *= upright * q
+    return vel + bonus + couple, vx, {"walk_vel": vel, "step_bonus": bonus, "couple": couple, "quality": q, "real_steps": real,
+                                      **{"viol_" + k: v for k, v in g.last.items()}}
 
 
 class WalkEnv(LocomotionEnv):

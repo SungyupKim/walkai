@@ -60,6 +60,7 @@ COUPLE_K = 3.0              # reward = K * (forward speed of the swinging foot, 
 FOOT_V_CAP = 2.0
 BODY_V_CAP = 1.0
 QUALITY_SCALE = 2.0         # gait quality q = exp(-violations / QUALITY_SCALE) in (0, 1]; gates every walking reward (never negative)
+STAND_SCALE_WALKING = 0.3   # GetUpEnv's standing reward (+1/step) is scaled by this while a walking command is active, so staying put is no longer the safe option
 STEP_LEAD_MIN = 0.10        # ... and a real step must land the foot at least this far ahead of the other foot
 
 
@@ -231,6 +232,8 @@ class WalkGetUpEnv(GetUpEnv):
 
     def step(self, action):
         obs, reward, terminated, truncated, info = super().step(action)
+        if self._target_vx > 0.1:
+            reward *= STAND_SCALE_WALKING
         walk, vx, parts = walk_reward(self, info["standing"], action)
         reward += walk
         info.setdefault("reward_breakdown", {}).update(parts)

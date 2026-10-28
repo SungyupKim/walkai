@@ -65,6 +65,7 @@ STEP_LEAD_MAX = 1.2         # MPC's feasible gaits land the foot up to ~1 m ahea
 SS_K = 1.5                  # dense single-support reward: exactly one foot lifted (<= SS_MAX_AIR_S), the other planted (MPC cost term)
 SS_MAX_AIR_S = 0.5          # standing on one leg forever (flamingo) earns nothing
 FLIGHT_K = 8.0              # both feet off the ground = hopping (MPC cost term)
+CROSS_MULT = 4.0            # a step where the REAR foot swings past the other foot and lands ahead earns this many times the step bonus
 STEP_LEAD_MIN = 0.10        # ... and a real step must land the foot at least this far ahead of the other foot
 
 
@@ -82,6 +83,9 @@ class GaitTracker:
         self.vfoot = [0.0, 0.0]
         self.zfoot = [0.0, 0.0]
         self.single = 0.0
+        self.was_lifted = [False, False]
+        self.cross = 0
+        self.rel_lift = [0.0, 0.0]      # foot x minus other foot x at the moment this foot left the ground
         self.last = {}
 
     def update(self, env, action, moving):
@@ -89,16 +93,24 @@ class GaitTracker:
         zs = [float(env.data.site_xpos[s][2]) for s in env.a_feet]
         xs = [float(env.data.site_xpos[s][0]) for s in env.a_feet]
         lifted = [z > FOOT_LIFT_Z for z in zs]
-        bonus, real = 0.0, 0
+        bonus, real, cross = 0.0, 0, 0
         for f in (0, 1):
+            if lifted[f] and not self.was_lifted[f]:
+                self.rel_lift[f] = xs[f] - xs[1 - f]
             if lifted[f]:
                 self.air[f] += DT
             elif self.air[f] > 0.0:                       # touchdown
                 if (self.air[f] >= STEP_MIN_AIR_S and not lifted[1 - f] and moving
                         and STEP_LEAD_MIN <= xs[f] - xs[1 - f] <= STEP_LEAD_MAX):
-                    bonus += STEP_BONUS * (min(self.air[f], STEP_AIR_CAP_S) - STEP_MIN_AIR_S + 0.05)
+                    b = STEP_BONUS * (min(self.air[f], STEP_AIR_CAP_S) - STEP_MIN_AIR_S + 0.05)
+                    if self.rel_lift[f] < 0.0:        # rear foot passed the other foot: alternating, legs cross
+                        b *= CROSS_MULT
+                        cross += 1
+                    bonus += b
                     real += 1
                 self.air[f] = 0.0
+        self.was_lifted = lifted
+        self.cross = cross
         self.since_step = 0 if real else self.since_step + 1
         gate = 1.0 if (not moving or self.since_step * DT <= STEP_GATE_S) else NO_STEP_GATE
         a = np.asarray(action, dtype=np.float32)
@@ -148,7 +160,7 @@ def walk_reward(env, upright, action):
     couple = COUPLE_K * swing_v * min(max(vx, 0.0), BODY_V_CAP) * float(moving and upright) * q
     bonus *= upright * q
     single = SS_K * g.single * float(moving and upright) * q
-    return vel + bonus + couple + single, vx, {"walk_vel": vel, "step_bonus": bonus, "couple": couple, "single": single, "quality": q, "real_steps": real,
+    return vel + bonus + couple + single, vx, {"walk_vel": vel, "step_bonus": bonus, "couple": couple, "single": single, "quality": q, "real_steps": real, "cross_steps": g.cross,
                                       **{"viol_" + k: v for k, v in g.last.items()}}
 
 

@@ -31,10 +31,10 @@ for run in a.runs:
     rows = []
     for sd in range(a.seeds):
         o, _ = e.reset(seed=900 + sd)
-        x0 = float(e.data.qpos[e.model.joint("a_root_x").qposadr[0]]); st = 0; up = []; ss = []; q = []
+        x0 = float(e.data.qpos[e.model.joint("a_root_x").qposadr[0]]); st = 0; cr = 0; up = []; ss = []; q = []
         for _ in range(400):
             o, r, te, tr, i = e.step(m.predict(o, deterministic=True)[0])
-            b = i["reward_breakdown"]; st += b["real_steps"]; up.append(i["upright"]); ss.append(b["single"] > 0); q.append(b["quality"])
-        rows.append((np.mean(up), i["root_x"] - x0, st, np.mean(ss), np.mean(q)))
+            b = i["reward_breakdown"]; st += b["real_steps"]; cr += b["cross_steps"]; up.append(i["upright"]); ss.append(b["single"] > 0); q.append(b["quality"])
+        rows.append((np.mean(up), i["root_x"] - x0, st, np.mean(ss), np.mean(q), cr))
     r = np.array(rows).mean(0)
-    print(f"{run} [{os.path.basename(ck).split('_')[-2]} steps] cmd {a.cmd}: upright {r[0]*100:3.0f}% | moved {r[1]:+.2f} m/8s | real steps {r[2]:.1f} | single-support {r[3]*100:3.0f}% | quality {r[4]:.2f}", flush=True)
+    print(f"{run} [{os.path.basename(ck).split('_')[-2]} steps] cmd {a.cmd}: upright {r[0]*100:3.0f}% | moved {r[1]:+.2f} m/8s | real steps {r[2]:.1f} (rear foot passes {r[5]:.1f}) | single-support {r[3]*100:3.0f}% | quality {r[4]:.2f}", flush=True)

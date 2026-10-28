@@ -54,14 +54,14 @@ HIP_MAX_RAD = 0.8           # ~55 deg flexion; limits -20..120 deg
 HIP_K = 20.0                # per rad beyond HIP_MAX_RAD
 KNEE_MIN_RAD = -1.75        # ~-100 deg; limits -140..0
 KNEE_K = 10.0
-FEET_GAP_MAX = 0.5          # |x_r - x_l| beyond this (m) is penalised (the stand policy stands in a 0.4-0.8 m split) ...
-FEET_GAP_K = 3.0
+FEET_GAP_MAX = 0.3          # |x_r - x_l| beyond this (m) is penalised (the stand policy stands in a 0.4-0.8 m split) ...
+FEET_GAP_K = 6.0
 COUPLE_K = 3.0              # reward = K * (forward speed of the swinging foot, world frame, <= 2 m/s) * (body forward speed, <= 1 m/s)
 FOOT_V_CAP = 2.0
 BODY_V_CAP = 1.0
 QUALITY_SCALE = 2.0         # gait quality q = exp(-violations / QUALITY_SCALE) in (0, 1]; gates every walking reward (never negative)
 STAND_SCALE_WALKING = 0.3   # GetUpEnv's standing reward (+1/step) is scaled by this while a walking command is active, so staying put is no longer the safe option
-STEP_LEAD_MAX = 1.2         # MPC's feasible gaits land the foot up to ~1 m ahead of the other (was capped at 0.6: counted 0-5 steps)
+STEP_LEAD_MAX = 0.6         # MPC's feasible gaits land the foot up to ~1 m ahead of the other (was capped at 0.6: counted 0-5 steps)
 SS_K = 1.5                  # dense single-support reward: exactly one foot lifted (<= SS_MAX_AIR_S), the other planted (MPC cost term)
 SS_MAX_AIR_S = 0.5          # standing on one leg forever (flamingo) earns nothing
 FLIGHT_K = 8.0              # both feet off the ground = hopping (MPC cost term)

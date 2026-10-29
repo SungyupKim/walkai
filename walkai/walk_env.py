@@ -54,18 +54,21 @@ HIP_MAX_RAD = 0.8           # ~55 deg flexion; limits -20..120 deg
 HIP_K = 20.0                # per rad beyond HIP_MAX_RAD
 KNEE_MIN_RAD = -1.75        # ~-100 deg; limits -140..0
 KNEE_K = 10.0
-FEET_GAP_MAX = 0.3          # |x_r - x_l| beyond this (m) is penalised (the stand policy stands in a 0.4-0.8 m split) ...
-FEET_GAP_K = 6.0
+FEET_GAP_MAX = 1.2          # |x_r - x_l| beyond this (m) is penalised (the stand policy stands in a 0.4-0.8 m split) ...
+FEET_GAP_K = 3.0
 COUPLE_K = 3.0              # reward = K * (forward speed of the swinging foot, world frame, <= 2 m/s) * (body forward speed, <= 1 m/s)
 FOOT_V_CAP = 2.0
 BODY_V_CAP = 1.0
 QUALITY_SCALE = 2.0         # gait quality q = exp(-violations / QUALITY_SCALE) in (0, 1]; gates every walking reward (never negative)
 STAND_SCALE_WALKING = 0.3   # GetUpEnv's standing reward (+1/step) is scaled by this while a walking command is active, so staying put is no longer the safe option
-STEP_LEAD_MAX = 0.6         # MPC's feasible gaits land the foot up to ~1 m ahead of the other (was capped at 0.6: counted 0-5 steps)
+STEP_LEAD_MAX = 1.2         # MPC's feasible gaits land the foot up to ~1 m ahead of the other (was capped at 0.6: counted 0-5 steps)
 SS_K = 1.5                  # dense single-support reward: exactly one foot lifted (<= SS_MAX_AIR_S), the other planted (MPC cost term)
 SS_MAX_AIR_S = 0.5          # standing on one leg forever (flamingo) earns nothing
 FLIGHT_K = 8.0              # both feet off the ground = hopping (MPC cost term)
 CROSS_MULT = 4.0            # a step where the REAR foot swings past the other foot and lands ahead earns this many times the step bonus
+ACT_K = 2.0                 # dense leg-activity reward: swing foot moving FORWARD relative to the planted foot (m/s, capped), while one foot is planted
+ACT_REAR_W = 1.0            # weight when the swinging foot is the rear one (it is catching up / passing)
+ACT_FRONT_W = 0.3           # weight when the swinging foot is already in front (extending the stride further)
 STEP_LEAD_MIN = 0.10        # ... and a real step must land the foot at least this far ahead of the other foot
 
 
@@ -83,6 +86,7 @@ class GaitTracker:
         self.vfoot = [0.0, 0.0]
         self.zfoot = [0.0, 0.0]
         self.single = 0.0
+        self.swing_act = 0.0
         self.was_lifted = [False, False]
         self.cross = 0
         self.rel_lift = [0.0, 0.0]      # foot x minus other foot x at the moment this foot left the ground
@@ -93,6 +97,13 @@ class GaitTracker:
         zs = [float(env.data.site_xpos[s][2]) for s in env.a_feet]
         xs = [float(env.data.site_xpos[s][0]) for s in env.a_feet]
         lifted = [z > FOOT_LIFT_Z for z in zs]
+        vf = [0.0, 0.0] if self.prev_x is None else [(xs[f] - self.prev_x[f]) / DT for f in (0, 1)]
+        act = 0.0
+        for f in (0, 1):
+            if zs[f] > 0.15 and zs[1 - f] < PLANTED_Z:
+                v = min(max(vf[f] - vf[1 - f], 0.0), FOOT_V_CAP)
+                act += v * (ACT_REAR_W if xs[f] < xs[1 - f] else ACT_FRONT_W)
+        self.swing_act = act
         bonus, real, cross = 0.0, 0, 0
         for f in (0, 1):
             if lifted[f] and not self.was_lifted[f]:
@@ -160,7 +171,8 @@ def walk_reward(env, upright, action):
     couple = COUPLE_K * swing_v * min(max(vx, 0.0), BODY_V_CAP) * float(moving and upright) * q
     bonus *= upright * q
     single = SS_K * g.single * float(moving and upright) * q
-    return vel + bonus + couple + single, vx, {"walk_vel": vel, "step_bonus": bonus, "couple": couple, "single": single, "quality": q, "real_steps": real, "cross_steps": g.cross,
+    swing = ACT_K * g.swing_act * float(moving and upright) * q
+    return vel + bonus + couple + single + swing, vx, {"walk_vel": vel, "step_bonus": bonus, "couple": couple, "single": single, "swing": swing, "quality": q, "real_steps": real, "cross_steps": g.cross,
                                       **{"viol_" + k: v for k, v in g.last.items()}}
 
 

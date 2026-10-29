@@ -27,6 +27,9 @@ from env import FRAME_SKIP  # noqa: E402
 
 H, N, KN, SIGMA = 40, 160, 8, 0.45   # 0.8 s horizon
 TARGET_V = 0.4
+import os  # noqa: E402
+GAP_MAX = float(os.environ.get('MPC_GAP_MAX', FEET_GAP_MAX))   # |x_r - x_l| above this is penalised in the MPC cost
+GAP_K = float(os.environ.get('MPC_GAP_K', 3.0))
 
 
 def apply_ctrl(env, a):
@@ -60,7 +63,7 @@ def horizon_cost(tr, prev_xf):
     viol = (slip + 30 * (np.maximum(z0 - FOOT_Z_MAX, 0) + np.maximum(z1 - FOOT_Z_MAX, 0))
             + 20 * (np.maximum(hr - 0.7, 0) + np.maximum(hl - 0.7, 0))
             + 10 * (np.maximum(KNEE_MIN_RAD - kr, 0) + np.maximum(KNEE_MIN_RAD - kl, 0))
-            + 3 * np.maximum(np.abs(x0 - x1) - FEET_GAP_MAX, 0))
+            + GAP_K * np.maximum(np.abs(x0 - x1) - GAP_MAX, 0))
     flight = ((z0 > 0.12) & (z1 > 0.12)).astype(float)          # both feet off the ground = hopping, not walking
     viol = viol + 8.0 * flight
     fell = (z < 0.6).any()
@@ -82,7 +85,8 @@ def run_seed(args):
     xs_k, tt = np.linspace(0, H - 1, KN), np.arange(H)
     cur = mujoco.MjData(m)
     x_start = float(env.data.qpos[m.joint("a_root_x").qposadr[0]])
-    real, qs, ups, vxs, alive, falls = 0, [], [], [], 0, 0
+    real, cross, qs, ups, vxs, alive, falls = 0, 0, [], [], [], 0, 0
+    gaps, ss = [], []
     acts = []
     for k in range(steps):
         mujoco.mj_copyData(cur, m, env.data)
@@ -110,14 +114,15 @@ def run_seed(args):
         acts.append(a0)
         _, _, term, trunc, info = env.step(np.concatenate([[0.0], a0]).astype(np.float32))
         b = info["reward_breakdown"]
-        real += b["real_steps"]; qs.append(b["quality"]); ups.append(info["upright"]); vxs.append(info["vx"]); alive = k + 1
+        real += b["real_steps"]; cross += b["cross_steps"]; ss.append(b["single"] > 0)
+        gaps.append(float(env.data.site_xpos[env.a_feet[0]][0] - env.data.site_xpos[env.a_feet[1]][0])); qs.append(b["quality"]); ups.append(info["upright"]); vxs.append(info["vx"]); alive = k + 1
         if info["torso_z"] < 0.6:
             falls = 1
             break
         plan = np.vstack([plan[1:], plan[-1:]])
     dx = float(info["root_x"]) - x_start
     ok = (not falls) and real >= 8 and np.mean(qs) >= 0.8 and np.mean(vxs) >= 0.2
-    return dict(seed=seed, alive=alive, dx=dx, real_steps=real, quality=float(np.mean(qs)), upright=float(np.mean(ups)),
+    return dict(cross=cross, gap_lo=float(min(gaps)), gap_hi=float(max(gaps)), single=float(np.mean(ss)), seed=seed, alive=alive, dx=dx, real_steps=real, quality=float(np.mean(qs)), upright=float(np.mean(ups)),
                 mean_vx=float(np.mean(vxs)), fell=bool(falls), case=bool(ok), acts=np.array(acts))
 
 
@@ -133,9 +138,9 @@ def main():
     with Pool(min(a.procs, len(a.seeds))) as p:
         out = p.map(run_seed, [(s, a.steps, a.settle) for s in a.seeds])
     print(f"done in {time.time() - t0:.0f}s ({a.steps} steps = {a.steps * 0.02:.0f}s per seed)")
-    print(f"{'seed':>4} {'alive':>5} {'dx(m)':>6} {'vx':>5} {'real steps':>10} {'quality':>7} {'upright':>7}  case")
+    print(f"{'seed':>4} {'alive':>5} {'dx(m)':>6} {'vx':>5} {'steps':>5} {'cross':>5} {'single':>6} {'quality':>7} {'upright':>7} {'foot gap range(m)':>18}  case")
     for r in out:
-        print(f"{r['seed']:>4} {r['alive']:>5} {r['dx']:>6.2f} {r['mean_vx']:>5.2f} {r['real_steps']:>10} {r['quality']:>7.2f} {r['upright']*100:>6.0f}%  {'CASE' if r['case'] else ('fell' if r['fell'] else '-')}")
+        print(f"{r['seed']:>4} {r['alive']:>5} {r['dx']:>6.2f} {r['mean_vx']:>5.2f} {r['real_steps']:>5} {r['cross']:>5} {r['single']*100:>5.0f}% {r['quality']:>7.2f} {r['upright']*100:>6.0f}% {r['gap_lo']:>+8.2f} {r['gap_hi']:>+8.2f}  {'CASE' if r['case'] else ('fell' if r['fell'] else '-')}")
     print(f"cases: {sum(r['case'] for r in out)}/{len(out)}")
     np.savez(a.out, seeds=[r['seed'] for r in out], acts=np.stack([r['acts'] for r in out if len(r['acts']) == a.steps] or [np.zeros(1)]),
              case=[r['case'] for r in out])

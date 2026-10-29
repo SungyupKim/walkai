@@ -18,6 +18,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(ROOT.parent / "standai" / "scripts"))      # the REAL standai checkout (it holds checkpoints/kakao_token.json)
 
 TOTAL = 40_000_000
+TOTAL_BY_RUN = {"walk17": 60_000_000}
 PY = str(ROOT.parent / "standai" / ".venv" / "bin" / "python")
 
 
@@ -56,7 +57,7 @@ def describe(runs):
         if steps is None:
             blocks.append(f"🚶 {run}\n▸ 시작 중(체크포인트 아직 없음)")
             continue
-        lines = [f"🚶 걷기 학습 {run}", f"▸ 진행 {steps / 1e6:.0f}M / {TOTAL / 1e6:.0f}M ({100 * steps / TOTAL:.0f}%)"]
+        lines = [f"🚶 걷기 학습 {run}", f"▸ 진행 {steps / 1e6:.0f}M / {TOTAL_BY_RUN.get(run, TOTAL) / 1e6:.0f}M ({100 * steps / TOTAL_BY_RUN.get(run, TOTAL):.0f}%)"]
         ev = evaluate(run)
         if ev:
             up, mv, st, cr, ss, q = ev

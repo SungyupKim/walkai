@@ -72,6 +72,7 @@ ACT_FRONT_W = float(os.environ.get('WALK_ACT_FRONT', '0.0'))           # weight 
 PLAIN_MULT = float(os.environ.get('WALK_PLAIN_MULT', '0.4'))   # a step that does NOT pass the other foot (front-foot dragging) earns this fraction
 GATE_ON_CROSS = os.environ.get('WALK_GATE_CROSS', '0') == '1'    # velocity reward gated on crossing steps (1.5 s window) instead of any step
 CROSS_GATE_S = 1.5
+ACT_PASS_LEAD = float(os.environ.get('WALK_PASS_LEAD', '0.3'))   # the rear-foot swing reward continues until the foot is this far AHEAD of the other foot (it used to stop at x_other: no push to pass)
 STEP_LEAD_MIN = 0.10        # ... and a real step must land the foot at least this far ahead of the other foot
 
 
@@ -106,7 +107,7 @@ class GaitTracker:
         for f in (0, 1):
             if zs[f] > 0.15 and zs[1 - f] < PLANTED_Z:
                 v = min(max(vf[f] - vf[1 - f], 0.0), FOOT_V_CAP)
-                act += v * (ACT_REAR_W if xs[f] < xs[1 - f] else ACT_FRONT_W)
+                act += v * (ACT_REAR_W if xs[f] < xs[1 - f] + ACT_PASS_LEAD else ACT_FRONT_W)
         self.swing_act = act
         bonus, real, cross = 0.0, 0, 0
         for f in (0, 1):

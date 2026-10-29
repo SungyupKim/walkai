@@ -65,10 +65,13 @@ STEP_LEAD_MAX = 1.2         # MPC's feasible gaits land the foot up to ~1 m ahea
 SS_K = 1.5                  # dense single-support reward: exactly one foot lifted (<= SS_MAX_AIR_S), the other planted (MPC cost term)
 SS_MAX_AIR_S = 0.5          # standing on one leg forever (flamingo) earns nothing
 FLIGHT_K = 8.0              # both feet off the ground = hopping (MPC cost term)
-CROSS_MULT = 4.0            # a step where the REAR foot swings past the other foot and lands ahead earns this many times the step bonus
+CROSS_MULT = float(os.environ.get('WALK_CROSS_MULT', '8.0'))  # (was 4)            # a step where the REAR foot swings past the other foot and lands ahead earns this many times the step bonus
 ACT_K = 2.0                 # dense leg-activity reward: swing foot moving FORWARD relative to the planted foot (m/s, capped), while one foot is planted
-ACT_REAR_W = 1.0            # weight when the swinging foot is the rear one (it is catching up / passing)
-ACT_FRONT_W = 0.3           # weight when the swinging foot is already in front (extending the stride further)
+ACT_REAR_W = float(os.environ.get('WALK_ACT_REAR', '1.5'))            # weight when the swinging foot is the rear one (it is catching up / passing)
+ACT_FRONT_W = float(os.environ.get('WALK_ACT_FRONT', '0.0'))           # weight when the swinging foot is already in front (extending the stride further)
+PLAIN_MULT = float(os.environ.get('WALK_PLAIN_MULT', '0.4'))   # a step that does NOT pass the other foot (front-foot dragging) earns this fraction
+GATE_ON_CROSS = os.environ.get('WALK_GATE_CROSS', '0') == '1'    # velocity reward gated on crossing steps (1.5 s window) instead of any step
+CROSS_GATE_S = 1.5
 STEP_LEAD_MIN = 0.10        # ... and a real step must land the foot at least this far ahead of the other foot
 
 
@@ -81,6 +84,7 @@ class GaitTracker:
     def reset(self):
         self.air = [0.0, 0.0]
         self.since_step = 10 ** 6
+        self.since_cross = 10 ** 6
         self.prev_action = None
         self.prev_x = None
         self.vfoot = [0.0, 0.0]
@@ -117,13 +121,19 @@ class GaitTracker:
                     if self.rel_lift[f] < 0.0:        # rear foot passed the other foot: alternating, legs cross
                         b *= CROSS_MULT
                         cross += 1
+                    else:
+                        b *= PLAIN_MULT
                     bonus += b
                     real += 1
                 self.air[f] = 0.0
         self.was_lifted = lifted
         self.cross = cross
         self.since_step = 0 if real else self.since_step + 1
-        gate = 1.0 if (not moving or self.since_step * DT <= STEP_GATE_S) else NO_STEP_GATE
+        self.since_cross = 0 if cross else self.since_cross + 1
+        if GATE_ON_CROSS:
+            gate = 1.0 if (not moving or self.since_cross * DT <= CROSS_GATE_S) else (0.5 if self.since_step * DT <= STEP_GATE_S else NO_STEP_GATE)
+        else:
+            gate = 1.0 if (not moving or self.since_step * DT <= STEP_GATE_S) else NO_STEP_GATE
         a = np.asarray(action, dtype=np.float32)
         pen = 0.0 if self.prev_action is None else ACTION_RATE_K * float(np.mean((a[1:] - self.prev_action[1:]) ** 2))
         self.prev_action = a.copy()

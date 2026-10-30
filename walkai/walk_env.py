@@ -18,6 +18,7 @@ STANDAI_SCRIPTS = ROOT / "standai" / "scripts"
 if str(STANDAI_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(STANDAI_SCRIPTS))
 
+import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
 
 from env import FALL_HEIGHT  # noqa: E402
@@ -245,6 +246,12 @@ class WalkGetUpEnv(GetUpEnv):
         self._vmax = float(vmax)
         self._fixed_cmd = fixed_cmd
         self._gait = GaitTracker()
+        pool = os.environ.get('WALK_POOL')
+        self._pool = None
+        self._pool_frac = float(os.environ.get('WALK_POOL_FRAC', '0.5'))
+        if pool:
+            d = np.load(pool)
+            self._pool = (d['qpos'], d['qvel'])
 
     def set_vmax(self, vmax):
         self._vmax = float(vmax)
@@ -253,6 +260,21 @@ class WalkGetUpEnv(GetUpEnv):
         self._target_vx = draw_cmd(self.np_random, self._vmax, self._fixed_cmd)
 
     def reset(self, seed=None, options=None):
+        obs, info = self._reset_base(seed=seed, options=options)
+        if self._pool is not None and self.np_random.random() < self._pool_frac:
+            k = int(self.np_random.integers(len(self._pool[0])))
+            self.data.qpos[:] = self._pool[0][k]
+            self.data.qvel[:] = self._pool[1][k]
+            mujoco.mj_forward(self.model, self.data)
+            self._gait.reset()
+            self._prev_com_x = None
+            self._start_kind = "mpc_pool"
+            if self._fixed_cmd is None:
+                self._target_vx = float(self.np_random.uniform(0.3, max(0.3, min(self._vmax, 0.6))))     # a walking command
+            obs = self._obs()
+        return obs, info
+
+    def _reset_base(self, seed=None, options=None):
         self._gait.reset()
         if seed is not None:
             self._side_rng = np.random.default_rng(seed + 7919)

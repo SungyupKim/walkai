@@ -4,6 +4,7 @@
 The speed ceiling (vmax) ramps up automatically while the commanded-walk episodes stay on their feet.
 """
 import argparse
+import os
 import sys
 import pathlib as _pl
 sys.path.insert(0, str(_pl.Path(__file__).resolve().parent))
@@ -40,6 +41,21 @@ class StdFloor(BaseCallback):
 
     def _on_rollout_start(self):
         self._clamp()
+
+    def _on_step(self):
+        return True
+
+
+class SplitRamp(BaseCallback):
+    """Widen the split start pose linearly from 0 to 1 over `ramp_steps` (0 = already at the widest from the beginning)."""
+
+    def __init__(self, ramp_steps):
+        super().__init__()
+        self.ramp = ramp_steps
+
+    def _on_rollout_start(self):
+        if self.ramp > 0:
+            self.training_env.env_method("set_split_level", min(1.0, self.num_timesteps / self.ramp))
 
     def _on_step(self):
         return True
@@ -120,6 +136,7 @@ def main():
     print(f"[walk] warm-start {args.init_from}; run {run}", flush=True)
     model.learn(args.timesteps, reset_num_timesteps=True, tb_log_name=run, log_interval=5, callback=[
         StdFloor(args.std_min),
+        SplitRamp(int(float(os.environ.get('WALK_SPLIT_RAMP', '0')))),
         VmaxCurriculum(args.vmax, args.vmax_end),
         CheckpointCallback(max(args.save_freq // args.n_envs, 1), str(OUT_DIR / "autosave"), name_prefix=run)])
     model.save(OUT_DIR / f"{args.out}_final.zip")

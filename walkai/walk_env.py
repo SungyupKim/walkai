@@ -272,6 +272,8 @@ class WalkGetUpEnv(GetUpEnv):
         self._vmax = float(vmax)
         self._fixed_cmd = fixed_cmd
         self._gait = GaitTracker()
+        self._split_frac = float(os.environ.get('WALK_SPLIT_FRAC', '0'))      # share of episodes that start planted in a wide split (random rear foot)
+        self._split_level = 1.0 if float(os.environ.get('WALK_SPLIT_RAMP', '0')) <= 0 else 0.0   # 1 = widest split (hip_front 0.75 rad, gap ~0.85 m)
         pool = os.environ.get('WALK_POOL')
         self._pool = None
         self._pool_frac = float(os.environ.get('WALK_POOL_FRAC', '0.5'))
@@ -285,8 +287,32 @@ class WalkGetUpEnv(GetUpEnv):
     def _resample_target_vx(self):
         self._target_vx = draw_cmd(self.np_random, self._vmax, self._fixed_cmd)
 
+    def set_split_level(self, level):
+        self._split_level = float(level)
+
+    def _apply_split(self):
+        rear, front = ('r', 'l') if self.np_random.random() < 0.5 else ('l', 'r')
+        m, d = self.model, self.data
+        hip_front = 0.35 + 0.40 * self._split_level
+        for n, v in ((f'a_hip_{rear}', -0.35), (f'a_knee_{rear}', -0.02), (f'a_ankle_{rear}', 0.0),
+                     (f'a_hip_{front}', hip_front), (f'a_knee_{front}', -0.10), (f'a_ankle_{front}', 0.0)):
+            d.qpos[m.joint(n).qposadr[0]] = v
+        d.qpos[self.a_ry_qpos] = 0.0
+        d.qvel[:] = 0.0
+        mujoco.mj_forward(m, d)
+        d.qpos[m.joint('a_root_z').qposadr[0]] += 0.08 - min(d.site_xpos[s][2] for s in self.a_feet)
+        mujoco.mj_forward(m, d)
+
     def reset(self, seed=None, options=None):
         obs, info = self._reset_base(seed=seed, options=options)
+        if self._split_frac > 0 and self.np_random.random() < self._split_frac:
+            self._apply_split()
+            self._gait.reset()
+            self._prev_com_x = None
+            self._start_kind = "split"
+            if self._fixed_cmd is None:
+                self._target_vx = float(self.np_random.uniform(0.3, max(0.3, min(self._vmax, 0.6))))
+            return self._obs(), info
         if self._pool is not None and self.np_random.random() < self._pool_frac:
             k = int(self.np_random.integers(len(self._pool[0])))
             self.data.qpos[:] = self._pool[0][k]

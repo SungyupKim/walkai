@@ -46,7 +46,7 @@ def train_numbers(run):
 def evaluate(run):
     r = subprocess.run([PY, "-I", str(HERE / "report.py"), run, "--cmd", "0.4", "--seeds", "6"], capture_output=True, text=True, cwd=str(ROOT))
     line = next((l for l in r.stdout.splitlines() if l.startswith(run)), "")
-    m = re.search(r"upright\s+(\d+)%.*moved\s+([+-][\d.]+) m.*real steps ([\d.]+) \(rear foot passes ([\d.]+)\).*single-support\s+(\d+)%.*quality ([\d.]+)", line)
+    m = re.search(r"upright\s+(\d+)%.*moved\s+([+-][\d.]+) m.*real steps ([\d.]+) \(rear foot passes ([\d.]+); order swaps ([\d.]+)\).*single-support\s+(\d+)%.*quality ([\d.]+)", line)
     return m.groups() if m else None
 
 
@@ -60,9 +60,9 @@ def describe(runs):
         lines = [f"🚶 걷기 학습 {run}", f"▸ 진행 {steps / 1e6:.0f}M / {TOTAL_BY_RUN.get(run, TOTAL) / 1e6:.0f}M ({100 * steps / TOTAL_BY_RUN.get(run, TOTAL):.0f}%)"]
         ev = evaluate(run)
         if ev:
-            up, mv, st, cr, ss, q = ev
+            up, mv, st, cr, sw, ss, q = ev
             lines.append(f"▸ 평가(0.4m/s) 서있음 {up}% · 8초 이동 {mv}m · 발걸음 {st}")
-            lines.append(f"▸ ✨뒷발 추월 {cr}번 · 한발지지 {ss}% · 품질 {q}")
+            lines.append(f"▸ ✨순서교환 {sw}번 · 뒷발추월걸음 {cr}번 · 한발지지 {ss}% · 품질 {q}")
         tn = train_numbers(run)
         if tn:
             lines.append("▸ 학습 " + " · ".join(x for x in (f"쓰러짐 {tn['fall'] * 100:.0f}%" if 'fall' in tn else None,

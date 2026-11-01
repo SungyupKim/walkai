@@ -74,6 +74,10 @@ PLAIN_MULT = float(os.environ.get('WALK_PLAIN_MULT', '0.4'))   # a step that doe
 GATE_ON_CROSS = os.environ.get('WALK_GATE_CROSS', '0') == '1'    # velocity reward gated on crossing steps (1.5 s window) instead of any step
 CROSS_GATE_S = 1.5
 ACT_PASS_LEAD = float(os.environ.get('WALK_PASS_LEAD', '0.3'))   # the rear-foot swing reward continues until the foot is this far AHEAD of the other foot (it used to stop at x_other: no push to pass)
+SWAP_K = float(os.environ.get('WALK_SWAP_K', '15.0'))     # reward each time the two feet swap their front/back order (x_r - x_l changes sign beyond +-SWAP_HYST)
+SWAP_HYST = 0.05
+GATE_ON_SWAP = os.environ.get('WALK_GATE_SWAP', '0') == '1'    # velocity reward: full within SWAP_GATE_S of a swap, 0.6 with a recent plain step, else 0.3
+SWAP_GATE_S = 2.0
 STEP_LEAD_MIN = 0.10        # ... and a real step must land the foot at least this far ahead of the other foot
 
 
@@ -87,6 +91,9 @@ class GaitTracker:
         self.air = [0.0, 0.0]
         self.since_step = 10 ** 6
         self.since_cross = 10 ** 6
+        self.since_swap = 10 ** 6
+        self.side = 0
+        self.swap = 0
         self.prev_action = None
         self.prev_x = None
         self.vfoot = [0.0, 0.0]
@@ -130,9 +137,19 @@ class GaitTracker:
                 self.air[f] = 0.0
         self.was_lifted = lifted
         self.cross = cross
+        gap_x = xs[0] - xs[1]
+        sd = 1 if gap_x > SWAP_HYST else (-1 if gap_x < -SWAP_HYST else 0)
+        self.swap = 0
+        if sd != 0:
+            if self.side != 0 and sd != self.side:
+                self.swap = 1
+            self.side = sd
+        self.since_swap = 0 if self.swap else self.since_swap + 1
         self.since_step = 0 if real else self.since_step + 1
         self.since_cross = 0 if cross else self.since_cross + 1
-        if GATE_ON_CROSS:
+        if GATE_ON_SWAP:
+            gate = 1.0 if (not moving or self.since_swap * DT <= SWAP_GATE_S) else (0.6 if self.since_step * DT <= STEP_GATE_S else 0.3)
+        elif GATE_ON_CROSS:
             gate = 1.0 if (not moving or self.since_cross * DT <= CROSS_GATE_S) else (0.5 if self.since_step * DT <= STEP_GATE_S else NO_STEP_GATE)
         else:
             gate = 1.0 if (not moving or self.since_step * DT <= STEP_GATE_S) else NO_STEP_GATE
@@ -184,7 +201,8 @@ def walk_reward(env, upright, action):
     bonus *= upright * q
     single = SS_K * g.single * float(moving and upright) * q
     swing = ACT_K * g.swing_act * float(moving and upright) * q
-    return vel + bonus + couple + single + swing, vx, {"walk_vel": vel, "step_bonus": bonus, "couple": couple, "single": single, "swing": swing, "quality": q, "real_steps": real, "cross_steps": g.cross,
+    swap_r = SWAP_K * g.swap * float(moving and upright) * q
+    return vel + bonus + couple + single + swing + swap_r, vx, {"walk_vel": vel, "step_bonus": bonus, "couple": couple, "single": single, "swing": swing, "swap_reward": swap_r, "swap_steps": g.swap, "quality": q, "real_steps": real, "cross_steps": g.cross,
                                       **{"viol_" + k: v for k, v in g.last.items()}}
 
 

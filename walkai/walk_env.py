@@ -76,6 +76,7 @@ CROSS_GATE_S = 1.5
 ACT_PASS_LEAD = float(os.environ.get('WALK_PASS_LEAD', '0.3'))   # the rear-foot swing reward continues until the foot is this far AHEAD of the other foot (it used to stop at x_other: no push to pass)
 SWAP_K = float(os.environ.get('WALK_SWAP_K', '15.0'))     # reward each time the two feet swap their front/back order (x_r - x_l changes sign beyond +-SWAP_HYST)
 SWAP_HYST = 0.05
+ALT_K = float(os.environ.get('WALK_ALT_K', '0.0'))    # alternating foot contact: reward a touchdown (airtime >= STEP_MIN_AIR_S) by the foot that did NOT make the previous touchdown
 GATE_ON_SWAP = os.environ.get('WALK_GATE_SWAP', '0') == '1'    # velocity reward: full within SWAP_GATE_S of a swap, 0.6 with a recent plain step, else 0.3
 SWAP_GATE_S = 2.0
 STEP_LEAD_MIN = 0.10        # ... and a real step must land the foot at least this far ahead of the other foot
@@ -94,6 +95,8 @@ class GaitTracker:
         self.since_swap = 10 ** 6
         self.side = 0
         self.swap = 0
+        self.last_td = -1
+        self.alt = 0
         self.prev_action = None
         self.prev_x = None
         self.vfoot = [0.0, 0.0]
@@ -117,13 +120,16 @@ class GaitTracker:
                 v = min(max(vf[f] - vf[1 - f], 0.0), FOOT_V_CAP)
                 act += v * (ACT_REAR_W if xs[f] < xs[1 - f] + ACT_PASS_LEAD else ACT_FRONT_W)
         self.swing_act = act
-        bonus, real, cross = 0.0, 0, 0
+        bonus, real, cross, alt = 0.0, 0, 0, 0
         for f in (0, 1):
             if lifted[f] and not self.was_lifted[f]:
                 self.rel_lift[f] = xs[f] - xs[1 - f]
             if lifted[f]:
                 self.air[f] += DT
             elif self.air[f] > 0.0:                       # touchdown
+                if self.air[f] >= STEP_MIN_AIR_S and moving:
+                    alt += int(self.last_td != -1 and self.last_td != f)
+                    self.last_td = f
                 if (self.air[f] >= STEP_MIN_AIR_S and not lifted[1 - f] and moving
                         and STEP_LEAD_MIN <= xs[f] - xs[1 - f] <= STEP_LEAD_MAX):
                     b = STEP_BONUS * (min(self.air[f], STEP_AIR_CAP_S) - STEP_MIN_AIR_S + 0.05)
@@ -137,6 +143,7 @@ class GaitTracker:
                 self.air[f] = 0.0
         self.was_lifted = lifted
         self.cross = cross
+        self.alt = alt
         gap_x = xs[0] - xs[1]
         sd = 1 if gap_x > SWAP_HYST else (-1 if gap_x < -SWAP_HYST else 0)
         self.swap = 0
@@ -202,7 +209,8 @@ def walk_reward(env, upright, action):
     single = SS_K * g.single * float(moving and upright) * q
     swing = ACT_K * g.swing_act * float(moving and upright) * q
     swap_r = SWAP_K * g.swap * float(moving and upright) * q
-    return vel + bonus + couple + single + swing + swap_r, vx, {"walk_vel": vel, "step_bonus": bonus, "couple": couple, "single": single, "swing": swing, "swap_reward": swap_r, "swap_steps": g.swap, "quality": q, "real_steps": real, "cross_steps": g.cross,
+    alt_r = ALT_K * g.alt * float(moving and upright) * q
+    return vel + bonus + couple + single + swing + swap_r + alt_r, vx, {"walk_vel": vel, "step_bonus": bonus, "couple": couple, "single": single, "swing": swing, "swap_reward": swap_r, "alt_reward": alt_r, "alt_steps": g.alt, "swap_steps": g.swap, "quality": q, "real_steps": real, "cross_steps": g.cross,
                                       **{"viol_" + k: v for k, v in g.last.items()}}
 
 
